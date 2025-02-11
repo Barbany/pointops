@@ -1,10 +1,16 @@
 from typing import Tuple
 
 import numpy as np
-import pointops_cuda._ext as _ext
 import torch
 import torch.nn as nn
 from torch.autograd import Function
+
+""" Pointops has to be imported after torch as it requires libc10.so, loaded by torch """
+try:
+    import pointops._ext as _ext
+except ImportError as e:
+    print(e)
+
 
 
 class FurthestSampling(Function):
