@@ -16,3 +16,6 @@ temp.linux**
 
 # Virtual environment
 *venv/
+
+/dist/
+*.egg
