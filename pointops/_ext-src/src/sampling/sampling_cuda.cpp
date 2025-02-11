@@ -1,10 +1,8 @@
 #include <torch/serialize/tensor.h>
 #include <vector>
 #include <ATen/cuda/CUDAContext.h>
-#include <THC/THC.h>
+#include <ATen/ATen.h>
 #include "sampling_cuda_kernel.h"
-
-extern THCState *state;
 
 void gathering_forward_cuda(int b, int c, int n, int m, at::Tensor points_tensor, at::Tensor idx_tensor, at::Tensor out_tensor)
 {
