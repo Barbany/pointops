@@ -1,0 +1,18 @@
+*.egg-info
+__pycache__
+
+views/
+output/
+
+wandb/
+
+# Cuda extensions build
+lib.linux**
+temp.linux**
+/build/
+
+# Vim
+*.swp
+
+# Virtual environment
+*venv/
