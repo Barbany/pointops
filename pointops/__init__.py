@@ -759,31 +759,3 @@ class GroupAll(nn.Module):
         else:
             new_features = grouped_xyz
         return new_features
-
-
-def fnv_hash_vec(arr):
-    """
-    FNV64-1A
-    """
-    assert arr.ndim == 3
-    # Floor first for negative coordinates
-    arr = arr.copy()
-    arr = arr.astype(np.uint64, copy=False)
-    hashed_arr = np.uint64(14695981039346656037) * torch.ones(
-        (arr.size(0), arr.size(1)), dtype=np.uint64
-    )
-    for j in range(arr.shape[1]):  # loop on each coord channel
-        hashed_arr *= np.uint64(1099511628211)
-        hashed_arr = torch.bitwise_xor(hashed_arr, arr[:, j])
-    return hashed_arr
-
-
-# a = torch.rand((1,5,3)).cuda()
-# print(a)
-# knn = knnquery_heap(2, a, a)
-# print(knn)
-# print(dist)
-# idx = furthestsampling(a, 2)
-# print(idx)
-# idx = ballquery(0.5, 3, a, a)
-# print(idx)
