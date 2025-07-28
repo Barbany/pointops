@@ -1,6 +1,5 @@
-from typing import Tuple
+from typing import Tuple, Union
 
-import numpy as np
 import torch
 import torch.nn as nn
 from torch.autograd import Function
@@ -12,7 +11,6 @@ except ImportError as e:
     print(e)
 
 
-
 class FurthestSampling(Function):
     @staticmethod
     def forward(ctx, xyz, m):
@@ -22,8 +20,8 @@ class FurthestSampling(Function):
         """
         assert xyz.is_contiguous()
         b, n, _ = xyz.size()
-        idx = torch.cuda.IntTensor(b, m)
-        temp = torch.cuda.FloatTensor(b, n).fill_(1e10)
+        idx = torch.empty((b, m), dtype=torch.int32, device=xyz.device)
+        temp = torch.empty((b, n), dtype=torch.float32, device=xyz.device).fill_(1e10)
         _ext.furthestsampling_cuda(b, n, m, xyz, temp, idx)
         return idx
 
@@ -46,7 +44,7 @@ class Gathering(Function):
         assert idx.is_contiguous()
         b, c, n = features.size()
         m = idx.size(1)
-        output = torch.cuda.FloatTensor(b, c, m)
+        output = torch.empty((b, c, m), dtype=torch.float32, device=features.device)
         _ext.gathering_forward_cuda(b, c, n, m, features, idx, output)
         ctx.for_backwards = (idx, c, n)
         return output
@@ -55,7 +53,9 @@ class Gathering(Function):
     def backward(ctx, grad_out):
         idx, c, n = ctx.for_backwards
         b, m = idx.size()
-        grad_features = torch.cuda.FloatTensor(b, c, n).zero_()
+        grad_features = torch.empty(
+            (b, c, n), dtype=torch.float32, device=grad_out.device
+        ).zero_()
         grad_out_data = grad_out.data.contiguous()
         _ext.gathering_backward_cuda(b, c, n, m, grad_out_data, idx, grad_features.data)
         return grad_features, None
@@ -79,8 +79,8 @@ class NearestNeighbor(Function):
         assert known.is_contiguous()
         b, n, _ = unknown.size()
         m = known.size(1)
-        dist2 = torch.cuda.FloatTensor(b, n, 3)
-        idx = torch.cuda.IntTensor(b, n, 3)
+        dist2 = torch.empty((b, n, 3), dtype=torch.float32, device=unknown.device)
+        idx = torch.empty((b, n, 3), dtype=torch.int32, device=unknown.device)
         _ext.nearestneighbor_cuda(b, n, m, unknown, known, dist2, idx)
         return torch.sqrt(dist2), idx
 
@@ -111,21 +111,23 @@ class Interpolation(Function):
         b, c, m = features.size()
         n = idx.size(1)
         ctx.interpolation_for_backward = (idx, weight, m)
-        output = torch.cuda.FloatTensor(b, c, n)
+        output = torch.empty((b, c, n), dtype=torch.float32, device=features.device)
         _ext.interpolation_forward_cuda(b, c, m, n, features, idx, weight, output)
         return output
 
     @staticmethod
     def backward(
         ctx, grad_out: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         """
         input: grad_out: (b, c, n)
         output: grad_features: (b, c, m), None, None
         """
         idx, weight, m = ctx.interpolation_for_backward
         b, c, n = grad_out.size()
-        grad_features = torch.cuda.FloatTensor(b, c, m).zero_()
+        grad_features = torch.empty(
+            (b, c, m), dtype=torch.float32, device=grad_out.device
+        ).zero_()
         grad_out_data = grad_out.data.contiguous()
         _ext.interpolation_backward_cuda(
             b, c, n, m, grad_out_data, idx, weight, grad_features.data
@@ -147,20 +149,26 @@ class Grouping(Function):
         assert idx.is_contiguous()
         b, c, n = features.size()
         _, m, nsample = idx.size()
-        output = torch.cuda.FloatTensor(b, c, m, nsample)
+        output = torch.empty(
+            (b, c, m, nsample), dtype=torch.float32, device=features.device
+        )
         _ext.grouping_forward_cuda(b, c, n, m, nsample, features, idx, output)
         ctx.for_backwards = (idx, n)
         return output
 
     @staticmethod
-    def backward(ctx, grad_out: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def backward(
+        ctx, grad_out: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor | None]:
         """
         input: grad_out: (b, c, m, nsample)
         output: (b, c, n), None
         """
         idx, n = ctx.for_backwards
         b, c, m, nsample = grad_out.size()
-        grad_features = torch.cuda.FloatTensor(b, c, n).zero_()
+        grad_features = torch.empty(
+            (b, c, n), dtype=torch.float32, device=grad_out.device
+        ).zero_()
         grad_out_data = grad_out.data.contiguous()
         _ext.grouping_backward_cuda(
             b, c, n, m, nsample, grad_out_data, idx, grad_features.data
@@ -182,7 +190,9 @@ class GroupingInt(Function):
         assert idx.is_contiguous()
         b, c, n = features.size()
         _, m, nsample = idx.size()
-        output = torch.cuda.LongTensor(b, c, m, nsample)
+        output = torch.empty(
+            (b, c, m, nsample), dtype=torch.int64, device=features.device
+        )
         _ext.grouping_int_forward_cuda(b, c, n, m, nsample, features, idx, output)
         return output
 
@@ -210,7 +220,7 @@ class BallQuery(Function):
         assert new_xyz.is_contiguous()
         b, n, _ = xyz.size()
         m = new_xyz.size(1)
-        idx = torch.cuda.IntTensor(b, m, nsample).zero_()
+        idx = torch.empty((b, m, nsample), dtype=torch.int32, device=xyz.device).zero_()
         _ext.ballquery_cuda(b, n, m, radius, nsample, new_xyz, xyz, idx)
         return idx
 
@@ -235,7 +245,9 @@ class FeatureDistribute(Function):
         assert xyz.is_contiguous()
         b, n, _ = max_xyz.size()
         m = xyz.size(1)
-        distribute_idx = torch.cuda.IntTensor(b, m).zero_()
+        distribute_idx = torch.empty(
+            (b, m), dtype=torch.int32, device=xyz.device
+        ).zero_()
         _ext.featuredistribute_cuda(b, n, m, max_xyz, xyz, distribute_idx)
         return distribute_idx
 
@@ -262,7 +274,9 @@ class FeatureGather(Function):
         assert distribute_idx.is_contiguous()
         b, c, n = max_feature.size()
         m = distribute_idx.size(1)
-        distribute_feature = torch.cuda.FloatTensor(b, c, m).zero_()
+        distribute_feature = torch.empty(
+            (b, c, m), dtype=torch.float32, device=max_feature.device
+        ).zero_()
         _ext.featuregather_forward_cuda(
             b, n, m, c, max_feature, distribute_idx, distribute_feature
         )
@@ -278,7 +292,9 @@ class FeatureGather(Function):
         """
         distribute_idx, n = ctx.for_backwards
         b, c, m = grad_distribute_feature.size()
-        grad_max_feature = torch.cuda.FloatTensor(b, c, n).zero_()
+        grad_max_feature = torch.empty(
+            (b, c, n), dtype=torch.float32, device=grad_distribute_feature.device
+        ).zero_()
         grad_distribute_feature_data = grad_distribute_feature.data.contiguous()
         _ext.featuregather_backward_cuda(
             b,
@@ -318,7 +334,9 @@ class LabelStatBallRange(Function):
 
         b, n, nclass = label_stat.size()
         m = new_xyz.size(1)
-        new_label_stat = torch.cuda.IntTensor(b, m, nclass).zero_()
+        new_label_stat = torch.empty(
+            (b, m, nclass), dtype=torch.int32, device=xyz.device
+        ).zero_()
         _ext.labelstat_ballrange_cuda(
             b, n, m, radius, nclass, new_xyz, xyz, label_stat, new_label_stat
         )
@@ -350,7 +368,9 @@ class LabelStatIdx(Function):
 
         b, n, nclass = label_stat.size()
         m = idx.size(1)
-        new_label_stat = torch.cuda.IntTensor(b, m, nclass).zero_()
+        new_label_stat = torch.empty(
+            (b, m, nclass), dtype=torch.int32, device=label_stat.device
+        ).zero_()
         _ext.labelstat_idx_cuda(
             b, n, m, nsample, nclass, label_stat, idx, new_label_stat
         )
@@ -390,8 +410,10 @@ class LabelStatAndBallQuery(Function):
 
         b, n, nclass = label_stat.size()
         m = new_xyz.size(1)
-        new_label_stat = torch.cuda.IntTensor(b, m, nclass).zero_()
-        idx = torch.cuda.IntTensor(b, m, nsample).zero_()
+        new_label_stat = torch.empty(
+            (b, m, nclass), dtype=torch.int32, device=xyz.device
+        ).zero_()
+        idx = torch.empty((b, m, nsample), dtype=torch.int32, device=xyz.device).zero_()
 
         _ext.labelstat_and_ballquery_cuda(
             b,
@@ -441,13 +463,13 @@ def pairwise_distances(x, y=None):
 class KNNQueryNaive(Function):
     @staticmethod
     def forward(
-        ctx, nsample: int, xyz: torch.Tensor, new_xyz: torch.Tensor = None
-    ) -> Tuple[torch.Tensor]:
+        ctx, nsample: int, xyz: torch.Tensor, new_xyz: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """
         KNN Indexing
         input: nsample: int32, Number of neighbor
                xyz: (b, n, 3) coordinates of the features
-               new_xyz: (b, m, 3) centriods
+               new_xyz: (b, m, 3) centroids
             output: idx: (b, m, nsample)
         """
         if new_xyz is None:
@@ -456,7 +478,7 @@ class KNNQueryNaive(Function):
         n = xyz.size(1)
 
         """
-        idx = torch.zeros(b, m, nsample).int().cuda()
+        idx = torch.empty((b, m, nsample), dtype=torch.int32, device=xyz.device).zero_()
         for i in range(b):
             dist = pairwise_distances(new_xyz[i, :, :], xyz[i, :, :])
             [_, idxs] = torch.sort(dist, dim=1)
@@ -492,8 +514,8 @@ knnquery_naive = KNNQueryNaive.apply
 class KNNQuery(Function):
     @staticmethod
     def forward(
-        ctx, nsample: int, xyz: torch.Tensor, new_xyz: torch.Tensor = None
-    ) -> Tuple[torch.Tensor]:
+        ctx, nsample: int, xyz: torch.Tensor, new_xyz: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """
         KNN Indexing
         input: nsample: int32, Number of neighbor
@@ -510,8 +532,10 @@ class KNNQuery(Function):
         assert new_xyz.is_contiguous()
         b, m, _ = new_xyz.size()
         n = xyz.size(1)
-        idx = torch.cuda.IntTensor(b, m, nsample).zero_()
-        dist2 = torch.cuda.FloatTensor(b, m, nsample).zero_()
+        idx = torch.empty((b, m, nsample), dtype=torch.int32, device=xyz.device).zero_()
+        dist2 = torch.empty(
+            (b, m, nsample), dtype=torch.float32, device=xyz.device
+        ).zero_()
         _ext.knnquery_cuda(b, n, m, nsample, xyz, new_xyz, idx, dist2)
         return idx
 
@@ -526,8 +550,8 @@ knnquery = KNNQuery.apply
 class KNNQuery_Heap(Function):
     @staticmethod
     def forward(
-        ctx, nsample: int, xyz: torch.Tensor, new_xyz: torch.Tensor = None
-    ) -> Tuple[torch.Tensor]:
+        ctx, nsample: int, xyz: torch.Tensor, new_xyz: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """
         KNN Indexing
         input: nsample: int32, Number of neighbor
@@ -542,8 +566,10 @@ class KNNQuery_Heap(Function):
         assert new_xyz.is_contiguous()
         b, m, _ = new_xyz.size()
         n = xyz.size(1)
-        idx = torch.cuda.IntTensor(b, m, nsample).zero_()
-        dist2 = torch.cuda.FloatTensor(b, m, nsample).zero_()
+        idx = torch.empty((b, m, nsample), dtype=torch.int32, device=xyz.device).zero_()
+        dist2 = torch.empty(
+            (b, m, nsample), dtype=torch.float32, device=xyz.device
+        ).zero_()
         _ext.knnquery_heap_cuda(b, n, m, nsample, xyz, new_xyz, idx, dist2)
         ctx.mark_non_differentiable(idx)
         return idx
@@ -559,8 +585,8 @@ knnquery_heap = KNNQuery_Heap.apply
 class KNNQueryExclude(Function):
     @staticmethod
     def forward(
-        ctx, nsample: int, xyz: torch.Tensor, new_xyz: torch.Tensor = None
-    ) -> Tuple[torch.Tensor]:
+        ctx, nsample: int, xyz: torch.Tensor, new_xyz: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """
         KNN Indexing
         input: nsample: int32, Number of neighbor
@@ -623,13 +649,16 @@ class QueryAndGroup(nn.Module):
     def forward(
         self,
         xyz: torch.Tensor,
-        new_xyz: torch.Tensor = None,
-        features: torch.Tensor = None,
-        idx: torch.Tensor = None,
-    ) -> torch.Tensor:
+        new_xyz: torch.Tensor | None = None,
+        features: torch.Tensor | None = None,
+        idx: torch.Tensor | None = None,
+    ) -> Union[
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        Tuple[torch.Tensor, torch.Tensor],
+    ]:
         """
         input: xyz: (b, n, 3) coordinates of the features
-               new_xyz: (b, m, 3) centriods
+               new_xyz: (b, m, 3) centroids
                features: (b, c, n)
                idx: idx of neighbors
                # idxs: (b, n)
@@ -648,10 +677,12 @@ class QueryAndGroup(nn.Module):
         xyz_trans = xyz.transpose(1, 2).contiguous()
         grouped_xyz = grouping(xyz_trans, idx)  # (b, 3, m, nsample)
         # grouped_idxs = grouping(idxs.unsqueeze(1).float(), idx).squeeze(1).int()  # (b, m, nsample)
+        assert grouped_xyz is not None, "Grouping failed, check your inputs!"
         grouped_xyz_diff = grouped_xyz - new_xyz.transpose(1, 2).unsqueeze(-1)
         if features is not None:
             grouped_features = grouping(features, idx)
             if self.use_xyz:
+                assert grouped_features is not None, "Grouping features failed!"
                 new_features = torch.cat(
                     [grouped_xyz_diff, grouped_features], dim=1
                 )  # (b, 3+c, m, nsample)
@@ -663,7 +694,9 @@ class QueryAndGroup(nn.Module):
             ), "Cannot have not features and not use xyz as a feature!"
             new_features = grouped_xyz_diff
 
+        assert new_features is not None, "Grouping features failed!"
         if self.return_idx:
+            assert idx is not None, "Indexing failed!"
             return new_features, grouped_xyz, idx.long()
             # (b,c,m,k), (b,3,m,k), (b,m,k)
         else:
@@ -686,13 +719,13 @@ class QueryAndGroupForKPConv(nn.Module):
     def forward(
         self,
         xyz: torch.Tensor,
-        new_xyz: torch.Tensor = None,
-        features: torch.Tensor = None,
-        idx: torch.Tensor = None,
-    ) -> torch.Tensor:
+        new_xyz: torch.Tensor | None = None,
+        features: torch.Tensor | None = None,
+        idx: torch.Tensor | None = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         input: xyz: (b, n, 3) coordinates of the features
-               new_xyz: (b, m, 3) centriods
+               new_xyz: (b, m, 3) centroids
                features: (b, c, n)
                idx: idx of neighbors
                # idxs: (b, n)
@@ -710,10 +743,12 @@ class QueryAndGroupForKPConv(nn.Module):
         xyz_trans = xyz.transpose(1, 2).contiguous()
         grouped_xyz = grouping(xyz_trans, idx)  # (b, 3, m, nsample)
         # grouped_idxs = grouping(idxs.unsqueeze(1).float(), idx).squeeze(1).int()  # (b, m, nsample)
+        assert grouped_xyz is not None, "Grouping xyz failed!"
         grouped_xyz_diff = grouped_xyz - new_xyz.transpose(1, 2).unsqueeze(-1)
         if features is not None:
             grouped_features = grouping(features, idx)
             if self.use_xyz:
+                assert grouped_features is not None, "Grouping features failed!"
                 new_features = torch.cat(
                     [grouped_xyz_diff, grouped_features], dim=1
                 )  # (b, c+3, m, nsample)
@@ -726,6 +761,8 @@ class QueryAndGroupForKPConv(nn.Module):
             new_features = grouped_xyz_diff
 
         # (b,c,m,k), (b,3,m,k)
+        assert new_features is not None, "Grouping features failed!"
+        assert idx is not None, "Indexing failed!"
         return new_features, grouped_xyz, idx
 
 
@@ -739,8 +776,11 @@ class GroupAll(nn.Module):
         self.use_xyz = use_xyz
 
     def forward(
-        self, xyz: torch.Tensor, new_xyz: torch.Tensor, features: torch.Tensor = None
-    ) -> Tuple[torch.Tensor]:
+        self,
+        xyz: torch.Tensor,
+        new_xyz: torch.Tensor,
+        features: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """
         input: xyz: (b, n, 3) coordinates of the features
                new_xyz: ignored torch
